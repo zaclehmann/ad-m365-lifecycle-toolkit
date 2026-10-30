@@ -155,8 +155,7 @@ foreach ($row in $rows) {
                 -UpnSuffix $config.Organisation.UpnSuffix -Reserved $reserved -Server $ad.Server
             $result.SamAccountName = $sam
             $result.UserPrincipalName = "$sam@$($config.Organisation.UpnSuffix)"
-            $password = New-LtPassword -Length $ad.PasswordLength -AsPlainText
-            $result.InitialPassword = ConvertTo-SecureString $password -AsPlainText -Force
+            $result.InitialPassword = New-LtPassword -Length $ad.PasswordLength
 
             $user = New-LtADUser @sp -SamAccountName $sam -UserPrincipalName $result.UserPrincipalName `
                 -GivenName $first -Surname $last -Path $ou -Password $result.InitialPassword -EmployeeId $employeeId `
@@ -165,7 +164,7 @@ foreach ($row in $rows) {
             if ($user) {
                 $userCreated = $true
                 Add-LtResultMessage $result Action "Created AD user in $ou"
-                $passwords.Add([pscustomobject]@{ SamAccountName = $sam; UserPrincipalName = $result.UserPrincipalName; Password = $password })
+                $passwords.Add($result)
             }
             elseif ($isPreview) {
                 Add-LtResultMessage $result Action "Created AD user in $ou" -Preview
@@ -268,7 +267,9 @@ if ($passwords.Count) {
     # Deliberately shown on screen only: not logged, not in the report.
     Write-Host ''
     Write-Host 'Initial passwords (shown once; users must change at first logon). Hand over securely:' -ForegroundColor Yellow
-    $passwords | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+    $passwords |
+        Select-Object SamAccountName, UserPrincipalName, @{ Name = 'Password'; Expression = { ConvertFrom-LtSecureString $_.InitialPassword } } |
+        Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 }
 
 $exitCode = if ($results.Status -match 'Failed|Partial') { 1 } else { 0 }

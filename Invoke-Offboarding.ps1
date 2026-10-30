@@ -18,17 +18,26 @@
     removing the licence group) from a user mailbox starts its deletion countdown, so if
     conversion fails those steps are skipped and the leaver is reported as Partial.
 
+    Leavers with a LeaveDate in the future are not offboarded yet. Their account is set to expire
+    at the end of that day (so access stops on time even if nobody runs the script) and they are
+    reported as Scheduled. Run the same CSV daily, e.g. from Task Scheduler, and each leaver is
+    fully offboarded on the first run on or after their leave date.
+
     Run with -WhatIf first to preview every change.
 
 .PARAMETER CsvPath
     CSV of leavers. Required columns: Identity (sAMAccountName or UPN), Ticket.
-    Optional columns: Delegate (who gets mailbox access instead of the manager), AutoReplyMessage.
+    Optional columns: LeaveDate (yyyy-MM-dd), Delegate (who gets mailbox access instead of the
+    manager), AutoReplyMessage.
 
 .PARAMETER Identity
     Offboard a single user (sAMAccountName or UPN) instead of a CSV.
 
 .PARAMETER Ticket
     Change or incident reference, stamped on the account description and in the log.
+
+.PARAMETER LeaveDate
+    Single-user mode: last working day. If it's in the future the leaver is scheduled, not offboarded.
 
 .PARAMETER Delegate
     Single-user mode: who gets Full Access to the shared mailbox. Defaults to the manager.
@@ -53,8 +62,13 @@
 .EXAMPLE
     .\Invoke-Offboarding.ps1 -CsvPath .\samples\leavers.csv
 
+.EXAMPLE
+    .\Invoke-Offboarding.ps1 -Identity priya.patel -Ticket CHG0012001 -LeaveDate 2026-12-18
+
+    Sets the account to expire at the end of 18 December. Re-run on or after that date to offboard.
+
 .NOTES
-    Exit codes: 0 = all succeeded, 1 = at least one leaver failed or partly failed,
+    Exit codes: 0 = all succeeded or scheduled, 1 = at least one leaver failed or partly failed,
     2 = the config or CSV could not be loaded.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Csv')]
@@ -62,6 +76,7 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Csv')][string]$CsvPath,
     [Parameter(Mandatory, ParameterSetName = 'Single')][string]$Identity,
     [Parameter(Mandatory, ParameterSetName = 'Single')][string]$Ticket,
+    [Parameter(ParameterSetName = 'Single')][datetime]$LeaveDate,
     [Parameter(ParameterSetName = 'Single')][string]$Delegate,
     [Parameter(ParameterSetName = 'Single')][string]$AutoReplyMessage,
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'config\toolkit.config.psd1'),
@@ -90,7 +105,13 @@ try {
         -InstallHint 'Install RSAT: Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0'
 
     if ($PSCmdlet.ParameterSetName -eq 'Single') {
-        $rows = @([pscustomobject]@{ Identity = $Identity; Ticket = $Ticket; Delegate = $Delegate; AutoReplyMessage = $AutoReplyMessage })
+        $rows = @([pscustomobject]@{
+                Identity         = $Identity
+                Ticket           = $Ticket
+                LeaveDate        = $(if ($PSBoundParameters.ContainsKey('LeaveDate')) { $LeaveDate.ToString('yyyy-MM-dd') })
+                Delegate         = $Delegate
+                AutoReplyMessage = $AutoReplyMessage
+            })
     }
     else {
         $rows = @(Import-LtCsv -Path $CsvPath -RequiredColumns 'Identity', 'Ticket')
@@ -124,12 +145,30 @@ foreach ($row in $rows) {
     try {
         if (-not $id) { throw 'Identity is empty' }
         if (-not $ticketRef) { throw 'Ticket is empty; every leaver needs a change/incident reference' }
+        $leaveText = Get-LtCsvValue $row 'LeaveDate'
+        $leaveDay = $null
+        if ($leaveText) {
+            $parsed = [datetime]::MinValue
+            if (-not [datetime]::TryParseExact($leaveText, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+                throw "LeaveDate '$leaveText' is not a valid date in yyyy-MM-dd format"
+            }
+            $leaveDay = $parsed
+        }
 
         $user = Find-LtADUser -Identity $id -Server $ad.Server
         if (-not $user) { throw "No AD user found with sAMAccountName/UPN '$id'" }
         $sam = $user.SamAccountName
         $result.SamAccountName = $sam
         $result.UserPrincipalName = $user.UserPrincipalName
+
+        # Future leave date: set the account to expire as a safety net and stop here.
+        if ($leaveDay -and $leaveDay.Date -gt (Get-Date).Date) {
+            Write-LtLog "Leave date $($leaveDay.ToString('yyyy-MM-dd')) is in the future; scheduling only" -Subject $sam
+            Set-LtAccountExpiration @sp -User $user -LeaveDate $leaveDay -Server $ad.Server
+            Add-LtResultMessage $result Action "Account set to expire at end of $($leaveDay.ToString('yyyy-MM-dd')); full offboarding on or after that date" -Preview:$isPreview
+            $result.Status = 'Scheduled'
+            continue
+        }
         Write-LtLog "Offboarding $($user.DisplayName) <$($user.UserPrincipalName)> ticket $ticketRef" -Subject $sam
 
         # Look everything up before changing anything.
@@ -147,7 +186,7 @@ foreach ($row in $rows) {
         }
 
         # 1. Snapshot -------------------------------------------------------------------------
-        $snapshot = Save-LtUserSnapshot @sp -User $user -Directory $off.SnapshotPath -Ticket $ticketRef
+        $snapshot = Save-LtUserSnapshot @sp -User $user -Directory $off.SnapshotPath -Ticket $ticketRef -CloudUser $cloudUser -MailboxInfo $mailbox
         Add-LtResultMessage $result Action "Snapshot $snapshot" -Preview:$isPreview
 
         # 2. Lock the account -----------------------------------------------------------------
@@ -236,7 +275,7 @@ foreach ($row in $rows) {
 }
 
 # Push the disabled state to Entra ID now rather than waiting up to 30 minutes.
-if ($useCloud -and $m365.DirSync.Enabled -and $m365.DirSync.Server -and ($results | Where-Object { $_.Status -ne 'Failed' })) {
+if ($useCloud -and $m365.DirSync.Enabled -and $m365.DirSync.Server -and ($results | Where-Object { $_.Status -notin 'Failed', 'Scheduled' })) {
     Start-LtDirectorySync @sp -Server $m365.DirSync.Server
 }
 

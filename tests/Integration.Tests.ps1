@@ -6,7 +6,13 @@ BeforeAll {
     $onboard = Join-Path $repoRoot 'Invoke-Onboarding.ps1'
     $offboard = Join-Path $repoRoot 'Invoke-Offboarding.ps1'
     $starters = Join-Path $repoRoot 'samples/new-starters.csv'
-    $leavers = Join-Path $repoRoot 'samples/leavers.csv'
+    # Fixed copy of the two immediate leavers from samples/leavers.csv, so editing the sample can't break tests.
+    $leavers = Join-Path $TestDrive 'leavers.csv'
+    @(
+        'Identity,Ticket,LeaveDate,Delegate,AutoReplyMessage'
+        'tom.baker,INC0042117,,,'
+        'amy.wong@contoso.com,INC0042118,,sara.khan,"Amy has moved on. For sales enquiries please email sales@contoso.com."'
+    ) | Set-Content $leavers
     . (Join-Path $PSScriptRoot 'Fakes/FakeEnvironment.ps1')
 
     function New-TestRun {
@@ -232,6 +238,128 @@ Describe 'Offboarding' {
             $results.Errors[0] | Should -BeLike "No AD user found*'nobody'*"
             $LASTEXITCODE | Should -Be 1
             $FakeEnv.Changes | Should -BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'Scheduled leavers' {
+    Context 'leave date in the future' {
+        BeforeAll {
+            $run = New-TestRun
+            $leaveDay = (Get-Date).Date.AddDays(7)
+            $results = & $offboard -Identity 'tom.baker' -Ticket 'CHG1' -LeaveDate $leaveDay -ConfigPath $run.Config -PassThru 6>$null
+            $exit = $LASTEXITCODE
+        }
+        It 'reports Scheduled and exits 0' {
+            $results.Status | Should -Be 'Scheduled'
+            $exit | Should -Be 0
+        }
+        It 'sets the account to expire at the end of the leave day' {
+            (Get-ADUser -Identity 'tom.baker').AccountExpirationDate | Should -Be $leaveDay.AddDays(1)
+        }
+        It 'changes nothing else' {
+            (Get-ADUser -Identity 'tom.baker').Enabled | Should -BeTrue
+            $FakeEnv.Changes | Should -Be @('Set-ADUser tom.baker')
+        }
+        It 'is idempotent' {
+            $FakeEnv.Changes.Clear()
+            $again = & $offboard -Identity 'tom.baker' -Ticket 'CHG1' -LeaveDate $leaveDay -ConfigPath $run.Config -PassThru 6>$null
+            $again.Status | Should -Be 'Scheduled'
+            $FakeEnv.Changes | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'from a CSV' {
+        BeforeAll {
+            $run = New-TestRun
+            $csv = Join-Path $run.Dir 'leavers.csv'
+            @(
+                'Identity,Ticket,LeaveDate'
+                "tom.baker,CHG1,$((Get-Date).ToString('yyyy-MM-dd'))"
+                "amy.wong,CHG2,$((Get-Date).AddDays(30).ToString('yyyy-MM-dd'))"
+                'mark.jones,CHG3,31/12/2026'
+            ) | Set-Content $csv
+            $results = & $offboard -CsvPath $csv -ConfigPath $run.Config -PassThru 6>$null
+        }
+        It 'offboards today''s leaver, schedules the future one and rejects a bad date' {
+            $results.Status | Should -Be @('Success', 'Scheduled', 'Failed')
+            $results[2].Errors[0] | Should -BeLike "*LeaveDate '31/12/2026'*yyyy-MM-dd*"
+            (Get-ADUser -Identity 'tom.baker').Enabled | Should -BeFalse
+            (Get-ADUser -Identity 'amy.wong').Enabled | Should -BeTrue
+        }
+    }
+}
+
+Describe 'Restore' {
+    BeforeAll { $restore = Join-Path $repoRoot 'Invoke-UserRestore.ps1' }
+
+    Context 'after offboarding' {
+        BeforeAll {
+            $run = New-TestRun
+            $before = Get-ADUser -Identity 'tom.baker'
+            & $offboard -Identity 'tom.baker' -Ticket 'INC1' -ConfigPath $run.Config 6>$null
+            # A second run (e.g. finishing a Partial) snapshots the already-stripped account.
+            & $offboard -Identity 'tom.baker' -Ticket 'INC1' -ConfigPath $run.Config 6>$null
+            $FakeEnv.Changes.Clear()
+            $result = & $restore -Identity 'tom.baker' -Ticket 'INC2' -ConfigPath $run.Config -PassThru 6>$null
+            $exit = $LASTEXITCODE
+            $after = Get-ADUser -Identity 'tom.baker'
+        }
+        It 'succeeds' {
+            $result.Status | Should -Be 'Success'
+            $exit | Should -Be 0
+        }
+        It 'puts the account back where and how it was' {
+            $after.DistinguishedName | Should -Be $before.DistinguishedName
+            $after.Enabled | Should -BeTrue
+            $after.Description | Should -Be $before.Description
+            $after.msExchHideFromAddressLists | Should -BeNullOrEmpty
+            $after.AccountExpirationDate | Should -BeNullOrEmpty
+            $after.ChangePasswordAtLogon | Should -BeTrue
+        }
+        It 'restores every group, using the earliest snapshot' {
+            ($after.MemberOf | Sort-Object) | Should -Be ($before.MemberOf | Sort-Object)
+        }
+        It 'converts the mailbox back and turns off the auto-reply' {
+            $FakeEnv.Mailboxes['tom.baker@contoso.com'].RecipientTypeDetails | Should -Be 'UserMailbox'
+            $FakeEnv.AutoReplies['tom.baker@contoso.com'] | Should -BeNullOrEmpty
+        }
+        It 'never writes the new password to the log' {
+            $plain = [System.Net.NetworkCredential]::new('', $result.InitialPassword).Password
+            (Get-RunLog $run).Contains($plain) | Should -BeFalse
+        }
+    }
+
+    Context 'direct licences' {
+        It 'puts back the licences removed at offboarding' {
+            $run = New-TestRun
+            $amy = $FakeEnv.CloudUsers['amy.wong@contoso.com']
+            # Shrink the mailbox so offboarding removes the licence.
+            $FakeEnv.Mailboxes['amy.wong@contoso.com'].TotalItemSize = '1 GB (1,073,741,824 bytes)'
+            & $offboard -Identity 'amy.wong' -Ticket 'INC1' -ConfigPath $run.Config 6>$null
+            $amy.AssignedLicenses | Should -BeNullOrEmpty
+            & $restore -Identity 'amy.wong' -Ticket 'INC2' -ConfigPath $run.Config 6>$null
+            $amy.AssignedLicenses.SkuId | Should -Be '05e9a617-0261-4cee-bb44-138d3ef5d965'
+        }
+    }
+
+    Context '-WhatIf' {
+        It 'changes nothing' {
+            $run = New-TestRun
+            & $offboard -Identity 'tom.baker' -Ticket 'INC1' -ConfigPath $run.Config 6>$null
+            $FakeEnv.Changes.Clear()
+            $result = & $restore -Identity 'tom.baker' -Ticket 'INC2' -ConfigPath $run.Config -WhatIf -PassThru 6>$null
+            $result.Status | Should -Be 'WhatIf'
+            $FakeEnv.Changes | Should -BeNullOrEmpty
+            (Get-ADUser -Identity 'tom.baker').Enabled | Should -BeFalse
+        }
+    }
+
+    Context 'no snapshot' {
+        It 'exits 2' {
+            $run = New-TestRun
+            & $restore -Identity 'mark.jones' -Ticket 'INC2' -ConfigPath $run.Config 2>$null 6>$null
+            $LASTEXITCODE | Should -Be 2
         }
     }
 }

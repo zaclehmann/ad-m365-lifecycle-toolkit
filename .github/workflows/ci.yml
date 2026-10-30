@@ -8,18 +8,20 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: PSScriptAnalyzer
         shell: pwsh
         run: |
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
           $results = @(
             Invoke-ScriptAnalyzer -Path ./src -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
-            Invoke-ScriptAnalyzer -Path ./Invoke-Onboarding.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
-            Invoke-ScriptAnalyzer -Path ./Invoke-Offboarding.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
+            Get-ChildItem ./Invoke-*.ps1 | ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Settings ./PSScriptAnalyzerSettings.psd1 }
           )
-          $results | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message | Out-String -Width 300
-          if ($results | Where-Object Severity -eq 'Error') { throw 'PSScriptAnalyzer found errors' }
+          if ($results) {
+            $results | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message | Out-String -Width 300
+            throw "PSScriptAnalyzer found $($results.Count) issue(s)"
+          }
+          'PSScriptAnalyzer: no issues'
 
   test:
     strategy:
@@ -37,7 +39,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Pester
         run: |
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12

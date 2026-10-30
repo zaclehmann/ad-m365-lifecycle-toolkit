@@ -167,7 +167,6 @@ function New-LtPassword {
         Ambiguous characters (0/O, 1/l/I) are left out so the password can be read out over the phone.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Generates a value only.')]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '', Justification = 'Converting a freshly generated random value.')]
     [CmdletBinding()]
     param(
         [ValidateRange(12, 128)][int]$Length = 16,
@@ -199,13 +198,30 @@ function New-LtPassword {
             $j = & $next ($i + 1)
             $tmp = $chars[$i]; $chars[$i] = $chars[$j]; $chars[$j] = $tmp
         }
-        $plain = -join $chars
     }
     finally {
         $rng.Dispose()
     }
 
-    if ($AsPlainText) { $plain } else { ConvertTo-SecureString -String $plain -AsPlainText -Force }
+    if ($AsPlainText) { return -join $chars }
+
+    # Build the SecureString one character at a time so the password never exists as a plain string.
+    $secure = New-Object System.Security.SecureString
+    foreach ($c in $chars) { $secure.AppendChar($c) }
+    $chars.Clear()
+    $secure.MakeReadOnly()
+    $secure
+}
+
+function ConvertFrom-LtSecureString {
+    <#
+    .SYNOPSIS
+        Returns the plain text of a SecureString. Used only to show initial passwords on screen once.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][securestring]$SecureString)
+    (New-Object System.Net.NetworkCredential('', $SecureString)).Password
 }
 
 function New-LtSamAccountName {

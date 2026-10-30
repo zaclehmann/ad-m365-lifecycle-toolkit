@@ -1,10 +1,14 @@
 # AD / M365 user onboarding and offboarding toolkit (PowerShell)
 
+[![CI](https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-/actions/workflows/ci.yml/badge.svg)](https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-/actions/workflows/ci.yml)
+![PowerShell 5.1 | 7](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE?logo=powershell&logoColor=white)
+
 Automates joiners and leavers for a **hybrid** environment: on-prem Active Directory synced to Entra ID, with mailboxes in Exchange Online.
 
 - **Onboarding** reads new starters from a CSV. For each one it creates the AD user in the right OU, adds groups, creates the home folder and assigns the Microsoft 365 licence.
-- **Offboarding** saves a snapshot of the user, disables the account, revokes sessions, converts the mailbox to shared (with manager access and an auto-reply), strips groups, removes licences and moves the account to a Disabled OU.
-- Both scripts support **`-WhatIf`** and **`-Confirm`**, read every environment-specific value from **one config file**, and write a **timestamped log file and a CSV report** for every run.
+- **Offboarding** saves a snapshot of the user, disables the account, revokes sessions, converts the mailbox to shared (with manager access and an auto-reply), strips groups, removes licences and moves the account to a Disabled OU. Leavers with a future leave date are scheduled instead.
+- **Restore** puts an offboarded user back exactly as they were, using that snapshot.
+- All three scripts support **`-WhatIf`** and **`-Confirm`**, read every environment-specific value from **one config file**, and write a **timestamped log file and a CSV report** for every run.
 
 ```
 PS> .\Invoke-Onboarding.ps1 -CsvPath .\samples\new-starters.csv -WhatIf
@@ -28,6 +32,8 @@ PS> .\Invoke-Onboarding.ps1 -CsvPath .\samples\new-starters.csv -WhatIf
 | **Idempotent** | EmployeeID is the key. Re-running a CSV never creates duplicates; it finishes whatever was left (missing groups, home folder, licence). |
 | **Sensible usernames** | `José O'Brien` becomes `jose.obrien`. A clash becomes `jose.obrien2`. Names are kept within the 20-character sAMAccountName limit. |
 | **Safe offboarding order** | The mailbox is converted to shared *before* any group or licence is removed, so mail is never lost. If conversion fails, those steps are skipped. |
+| **Scheduled leavers** | A future `LeaveDate` sets the account to expire at the end of that day, as a safety net. The leaver is fully offboarded on the first run on or after that date. |
+| **Undo** | `Invoke-UserRestore.ps1` restores OU, groups, description, licences and the mailbox from the leaver's snapshot. |
 | **Licence-aware** | Group-based licensing or direct Graph assignment. Leavers keep their licence when the shared mailbox is over 50 GB or on hold. |
 | **Audit trail** | Per-run log file and CSV report, a JSON snapshot of every leaver's groups, and an AD description such as `Leaver 2026-11-03 - INC0042117 - by zac`. |
 | **No secrets in logs** | Initial passwords are shown once on screen and never written to the log file or report. |
@@ -66,6 +72,11 @@ PS> .\Invoke-Onboarding.ps1 -CsvPath .\samples\new-starters.csv -WhatIf
    .\Invoke-Offboarding.ps1 -CsvPath .\leavers.csv -WhatIf
    .\Invoke-Offboarding.ps1 -Identity tom.baker -Ticket INC0042117
    .\Invoke-Offboarding.ps1 -Identity amy.wong@contoso.com -Ticket INC0042118 -Delegate sara.khan
+   .\Invoke-Offboarding.ps1 -Identity priya.patel -Ticket CHG0012001 -LeaveDate 2026-12-18
+   ```
+6. **Restore** a leaver who comes back, or one offboarded by mistake:
+   ```powershell
+   .\Invoke-UserRestore.ps1 -Identity tom.baker -Ticket INC0042200 -WhatIf
    ```
 
 Not got a domain to hand? Run `./tests/Invoke-Demo.ps1` to see the full joiner and leaver flow against the fake directory.
@@ -91,6 +102,7 @@ Not got a domain to hand? Run `./tests/Invoke-Demo.ps1` to see the full joiner a
 |---|---|---|
 | Identity | ✔ | sAMAccountName or UPN. |
 | Ticket | ✔ | Change or incident reference. Goes in the description and the log. |
+| LeaveDate | | `yyyy-MM-dd`. If it's in the future, the leaver is scheduled rather than offboarded. |
 | Delegate | | Who gets Full Access to the mailbox. Defaults to the manager. |
 | AutoReplyMessage | | Overrides the template in the config. |
 
@@ -114,19 +126,30 @@ Not got a domain to hand? Run `./tests/Invoke-Demo.ps1` to see the full joiner a
 8. Moves the account to the Disabled Users OU.
 9. One delta sync at the end of the run.
 
+A leaver whose `LeaveDate` is in the future only has their account expiry set, and is reported as `Scheduled`. Run the leavers CSV daily (e.g. from Task Scheduler) and each leaver is offboarded on their day.
+
+**Restore**, from the earliest snapshot for the user (or one named with `-SnapshotPath`):
+1. Moves the account back to its original OU.
+2. Re-adds its groups.
+3. Restores the description and GAL visibility, and clears the expiry.
+4. Sets a new password (shown once) and enables the account.
+5. Restores direct licences, converts the mailbox back to a user mailbox and turns off the auto-reply.
+
+Delegates added at offboarding keep their mailbox access, and an archived home folder isn't moved back. Both are listed in the log as manual follow-ups.
+
 `docs/DESIGN.md` explains *why* the steps are in this order, and the other design decisions.
 
 ## Output
 
 | Path | Contents |
 |---|---|
-| `logs/Onboarding_<time>_<runid>.log` | Every action, with timestamp, level and user. Old logs are pruned after `Logging.RetentionDays`. |
+| `logs/<op>_<time>_<runid>.log` | Every action, with timestamp, level and user. Old logs are pruned after `Logging.RetentionDays`. |
 | `output/reports/<op>_<time>_<runid>.csv` | One row per user: Status, Actions, Warnings, Errors. |
 | `output/snapshots/<user>_<time>.json` | Leaver state before any change. |
 
-Statuses are `Success`, `Partial` (re-run to finish), `Failed` and `WhatIf`.
+Statuses are `Success`, `Partial` (re-run to finish), `Failed`, `Scheduled` and `WhatIf`.
 
-Exit codes are `0` when all users succeeded, `1` when any user failed or partly failed, and `2` when the config or CSV couldn't be loaded. That makes the scripts easy to run from Task Scheduler or a pipeline.
+Exit codes are `0` when all users succeeded (or were scheduled), `1` when any user failed or partly failed, and `2` when the config or CSV couldn't be loaded. That makes the scripts easy to run from Task Scheduler or a pipeline.
 
 ## Unattended runs
 
@@ -137,6 +160,7 @@ For scheduled runs, set `M365.ClientId` and `M365.CertificateThumbprint` in the 
 ```
 Invoke-Onboarding.ps1          entry script for joiners
 Invoke-Offboarding.ps1         entry script for leavers
+Invoke-UserRestore.ps1         undo an offboarding from its snapshot
 config/toolkit.config.psd1     every environment-specific setting
 samples/                       example CSVs
 src/LifecycleToolkit/          PowerShell module: one function per step
@@ -154,3 +178,14 @@ Invoke-Pester ./tests
 ```
 
 CI (GitHub Actions) runs PSScriptAnalyzer and the Pester suite on Ubuntu (PowerShell 7) and Windows (PowerShell 7 and Windows PowerShell 5.1).
+
+The integration tests run the real scripts against `tests/Fakes/FakeEnvironment.ps1`, an in-memory stand-in for the AD, Graph and Exchange Online cmdlets. They check behaviour and ordering, but not real-service quirks. See [Limitations](#limitations).
+
+## Limitations
+
+- **Not yet run against a live domain or tenant.** Everything is tested against the fake environment. Try it in a lab (one DC, Entra Connect and an M365 developer tenant) before production, starting with `-WhatIf`.
+- **Exchange Online only.** For mailboxes still on-prem in a hybrid Exchange setup, conversion needs `Set-RemoteMailbox` instead.
+- **Hide from GAL** writes `msExchHideFromAddressLists` in AD, which needs the Exchange schema extensions. Set `HideFromGalOnLeave = $false` if you don't have them.
+- **Not handled:** OneDrive/Teams handover for leavers, sending initial passwords to managers, and reading starters straight from an HR system.
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.

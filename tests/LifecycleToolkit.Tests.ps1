@@ -53,6 +53,11 @@ Describe 'New-LtPassword' {
         $set = 1..50 | ForEach-Object { New-LtPassword -AsPlainText } | Select-Object -Unique
         @($set).Count | Should -Be 50
     }
+    It 'round-trips through ConvertFrom-LtSecureString' {
+        $plain = ConvertFrom-LtSecureString (New-LtPassword -Length 20)
+        $plain.Length | Should -Be 20
+        $plain | Should -MatchExactly '[A-Z]'
+    }
     It 'rejects lengths under 12' {
         { New-LtPassword -Length 8 } | Should -Throw
     }
@@ -176,5 +181,30 @@ Describe 'Write-LtLog' {
         Write-LtLog 'hello' -Level WARN -Subject 'jane' 6>$null
         $WhatIfPreference = $false
         Get-Content $file | Should -Match '\[WARN   \] \[jane\] hello$'
+    }
+}
+
+Describe 'Get-LtUserSnapshot' {
+    BeforeAll {
+        $dir = Join-Path $TestDrive 'snaps'
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        foreach ($stamp in '20261103-083002123', '20261101-090000000', '20261105-120000000') {
+            @{ SamAccountName = 'tom.baker'; ObjectGUID = [guid]::NewGuid().ToString(); DistinguishedName = 'CN=Tom Baker,OU=Users,DC=x'; Stamp = $stamp } |
+                ConvertTo-Json | Set-Content (Join-Path $dir "tom.baker_$stamp.json")
+        }
+        # Must not match tom.baker: a different user whose name starts the same way.
+        @{ SamAccountName = 'tom.baker2'; ObjectGUID = 'x'; DistinguishedName = 'y'; Stamp = 'other' } |
+            ConvertTo-Json | Set-Content (Join-Path $dir 'tom.baker2_20261001-000000000.json')
+    }
+    It 'picks the earliest snapshot for the user' {
+        (Get-LtUserSnapshot -Directory $dir -SamAccountName 'tom.baker').Stamp | Should -Be '20261101-090000000'
+    }
+    It 'throws when there is none' {
+        { Get-LtUserSnapshot -Directory $dir -SamAccountName 'nobody' } | Should -Throw '*No snapshot*'
+    }
+    It 'rejects a file that is not a snapshot' {
+        $bad = Join-Path $TestDrive 'bad.json'
+        '{ "foo": 1 }' | Set-Content $bad
+        { Get-LtUserSnapshot -Path $bad } | Should -Throw '*has no SamAccountName*'
     }
 }

@@ -1,3 +1,4 @@
-Identity,Ticket,Delegate,AutoReplyMessage
-tom.baker,INC0042117,,
-amy.wong@contoso.com,INC0042118,sara.khan,"Amy has moved on. For sales enquiries please email sales@contoso.com."
+Identity,Ticket,LeaveDate,Delegate,AutoReplyMessage
+tom.baker,INC0042117,,,
+amy.wong@contoso.com,INC0042118,,sara.khan,"Amy has moved on. For sales enquiries please email sales@contoso.com."
+priya.patel,CHG0012001,2030-12-18,,

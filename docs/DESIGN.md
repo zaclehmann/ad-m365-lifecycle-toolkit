@@ -38,6 +38,10 @@ The tooling is current: MSOnline and AzureAD modules are retired, so licensing u
 7. Optionally archive the home folder.
 8. Move the account to the Disabled Users OU.
 
+**Scheduled leavers.** A future `LeaveDate` only sets `AccountExpirationDate` to the day after it, and the leaver is reported as `Scheduled`. That's a safety net: access stops on time even if nobody runs the script on the day. The leavers CSV is meant to be run daily, and full offboarding happens on the first run on or after the leave date.
+
+**Restore.** `Invoke-UserRestore.ps1` reverses an offboarding from the snapshot: original OU, groups, description, GAL visibility, a new password, the account re-enabled, direct licences, and the mailbox back to a user mailbox. It uses the user's *earliest* snapshot, because a re-run of offboarding snapshots an already-stripped account.
+
 **Cross-cutting**
 - `-WhatIf` on both scripts. It previews every change and still runs every read-only check, so it doubles as a pre-flight test.
 - `-Confirm` support.
@@ -89,6 +93,7 @@ Exit codes: `0` all OK, `1` at least one Partial or Failed, `2` config or CSV co
 ```
 Invoke-Onboarding.ps1          entry script (CSV -> joiners)
 Invoke-Offboarding.ps1         entry script (CSV or -Identity -> leavers)
+Invoke-UserRestore.ps1         entry script (snapshot -> restored user)
 config/toolkit.config.psd1     all environment settings
 samples/*.csv                  example input files
 src/LifecycleToolkit/          module (Private = helpers, Public = steps)
@@ -101,10 +106,18 @@ tests/                         Pester tests + in-memory fake AD/Graph/EXO
 - **Integration tests** run both entry scripts end to end against `tests/Fakes/FakeEnvironment.ps1`. That file is an in-memory stand-in for the AD, Graph and EXO cmdlets, so the tests run on Linux CI with no domain. They check that `-WhatIf` changes nothing, that a re-run is idempotent, and that offboarding happens in the right order.
 - **PSScriptAnalyzer** runs in CI.
 
-## 9. Out of scope / future ideas
+## 9. Static analysis
+
+PSScriptAnalyzer runs in CI and fails the build on any warning. The rules that are suppressed, and why:
+
+- `PSAvoidUsingWriteHost` (all files): coloured operator output is the point of `Write-LtLog`.
+- `PSShouldProcess` (ActiveDirectory.ps1, Cloud.ps1, Invoke-LtChange): the functions *do* call `ShouldProcess`, via `Invoke-LtChange -Cmdlet $PSCmdlet`, but the analyzer only looks for a literal call in the same function.
+
+Passwords are built directly into a `SecureString` (never `ConvertTo-SecureString -AsPlainText`), and are only turned back into text once, for the console.
+
+## 10. Out of scope / future ideas
 
 - Pulling starters straight from an HR system API instead of CSV.
 - Delivering passwords to the manager by email or a password manager.
-- Scheduling offboarding for a future leave date (`AccountExpirationDate`).
 - On-prem Exchange (`Set-RemoteMailbox -Type Shared`) for hybrid Exchange shops.
 - Teams/OneDrive handover (OneDrive access for the manager).

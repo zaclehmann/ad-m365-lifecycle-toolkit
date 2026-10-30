@@ -44,12 +44,15 @@ Write-Host "Changes made: $($FakeEnv.Changes.Count)" -ForegroundColor Magenta
 Show-Step '4. Offboarding preview (-WhatIf)'
 & (Join-Path $repoRoot 'Invoke-Offboarding.ps1') -CsvPath (Join-Path $repoRoot 'samples/leavers.csv') -ConfigPath $config -WhatIf
 
-Show-Step '5. Offboarding for real'
+Show-Step '5. Offboarding for real (priya.patel has a future leave date, so is only scheduled)'
 $FakeEnv.Changes.Clear()
 & (Join-Path $repoRoot 'Invoke-Offboarding.ps1') -CsvPath (Join-Path $repoRoot 'samples/leavers.csv') -ConfigPath $config
 Write-Host ''
 Write-Host 'Order of changes made by offboarding:' -ForegroundColor Magenta
 $FakeEnv.Changes | ForEach-Object { Write-Host "  $_" }
+
+Show-Step '6. Restoring a leaver from their snapshot (e.g. they come back)'
+& (Join-Path $repoRoot 'Invoke-UserRestore.ps1') -Identity 'tom.baker' -Ticket 'INC0042200' -ConfigPath $config
 
 Show-Step 'Output files'
 Get-ChildItem $workDir -Recurse -File -Include *.log, *.csv, *.json | ForEach-Object { Write-Host "  $($_.FullName)" }

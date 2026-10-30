@@ -71,6 +71,8 @@ function global:Add-FakeUser {
         ObjectGUID                 = [guid]::NewGuid()
         SID                        = $(if ($global:FakeIsWindows) { "S-1-5-21-1111111111-2222222222-3333333333-$($global:FakeEnv.NextRid)" } else { $null })
         msExchHideFromAddressLists = $null
+        AccountExpirationDate      = $null
+        ChangePasswordAtLogon      = $false
     }
     if ($ManagerSam) { $user.Manager = (Get-FakeUserRecord $ManagerSam).DistinguishedName }
     $global:FakeEnv.Users.Add($user)
@@ -156,12 +158,14 @@ function global:New-ADUser {
 }
 
 function global:Set-ADUser {
-    param($Identity, $HomeDirectory, $HomeDrive, $Description, [hashtable]$Replace, $Server, [switch]$Confirm)
+    param($Identity, $HomeDirectory, $HomeDrive, $Description, [hashtable]$Replace, [string[]]$Clear,
+        $AccountExpirationDate, $ChangePasswordAtLogon, $Server, [switch]$Confirm)
     $u = Get-FakeUserRecord ([string]$Identity)
-    if ($PSBoundParameters.ContainsKey('HomeDirectory')) { $u.HomeDirectory = $HomeDirectory }
-    if ($PSBoundParameters.ContainsKey('HomeDrive')) { $u.HomeDrive = $HomeDrive }
-    if ($PSBoundParameters.ContainsKey('Description')) { $u.Description = $Description }
+    foreach ($p in 'HomeDirectory', 'HomeDrive', 'Description', 'AccountExpirationDate', 'ChangePasswordAtLogon') {
+        if ($PSBoundParameters.ContainsKey($p)) { $u.$p = $PSBoundParameters[$p] }
+    }
     if ($Replace) { foreach ($k in $Replace.Keys) { $u.$k = $Replace[$k] } }
+    foreach ($k in $Clear) { $u.$k = $null }
     Add-FakeChange "Set-ADUser $($u.SamAccountName)"
 }
 
@@ -204,6 +208,13 @@ function global:Disable-ADAccount {
     $u = Get-FakeUserRecord ([string]$Identity)
     $u.Enabled = $false
     Add-FakeChange "Disable-ADAccount $($u.SamAccountName)"
+}
+
+function global:Enable-ADAccount {
+    param($Identity, $Server, [switch]$Confirm)
+    $u = Get-FakeUserRecord ([string]$Identity)
+    $u.Enabled = $true
+    Add-FakeChange "Enable-ADAccount $($u.SamAccountName)"
 }
 
 function global:Move-ADObject {
@@ -283,7 +294,7 @@ function global:Get-EXOMailboxStatistics {
 function global:Set-Mailbox {
     param($Identity, $Type, [switch]$Confirm)
     if ($global:FakeEnv.FailMailboxConversion) { throw "The operation couldn't be performed because object '$Identity' couldn't be found" }
-    $global:FakeEnv.Mailboxes[[string]$Identity].RecipientTypeDetails = "${Type}Mailbox"
+    $global:FakeEnv.Mailboxes[[string]$Identity].RecipientTypeDetails = $(if ($Type -eq 'Regular') { 'UserMailbox' } else { "${Type}Mailbox" })
     Add-FakeChange "Set-Mailbox $Identity Type=$Type"
 }
 
@@ -300,7 +311,7 @@ function global:Add-MailboxPermission {
 
 function global:Set-MailboxAutoReplyConfiguration {
     param($Identity, $AutoReplyState, $InternalMessage, $ExternalMessage, $ExternalAudience, [switch]$Confirm)
-    $global:FakeEnv.AutoReplies[[string]$Identity] = $InternalMessage
+    $global:FakeEnv.AutoReplies[[string]$Identity] = $(if ($AutoReplyState -eq 'Disabled') { $null } else { $InternalMessage })
     Add-FakeChange "Set-MailboxAutoReplyConfiguration $Identity"
 }
 

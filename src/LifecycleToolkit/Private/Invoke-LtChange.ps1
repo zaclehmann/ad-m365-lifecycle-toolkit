@@ -8,6 +8,7 @@ function Invoke-LtChange {
         -Confirm prompts come from the caller's ShouldProcess.
         Returns whatever the script block outputs (nothing when the change was skipped).
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'Calls ShouldProcess on the caller''s $PSCmdlet, which declares SupportsShouldProcess.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][System.Management.Automation.PSCmdlet]$Cmdlet,

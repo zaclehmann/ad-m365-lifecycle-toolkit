@@ -1,3 +1,8 @@
+# PSShouldProcess can't see that these functions call $PSCmdlet.ShouldProcess through Invoke-LtChange
+# (the shared wrapper that also handles WHATIF logging), so it is suppressed for this file.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'ShouldProcess is called via Invoke-LtChange -Cmdlet $PSCmdlet.')]
+param()
+
 $script:LtSkuCache = $null
 
 function Connect-LtCloud {
@@ -291,5 +296,51 @@ function Convert-LtMailboxToShared {
             Set-MailboxAutoReplyConfiguration -Identity $id -AutoReplyState Enabled `
                 -InternalMessage $AutoReplyMessage -ExternalMessage $AutoReplyMessage -ExternalAudience All -Confirm:$false
         }
+    }
+}
+
+function Add-LtM365License {
+    <#
+    .SYNOPSIS
+        Assigns licences by SKU ID (used when restoring a leaver's direct licences from a snapshot).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]$CloudUser,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$SkuId
+    )
+    $upn = $CloudUser.UserPrincipalName
+    $missing = @($SkuId | Where-Object { $_ -and @($CloudUser.AssignedLicenses.SkuId) -notcontains $_ })
+    if (-not $missing) {
+        Write-LtLog 'No direct licences to restore' -Subject $upn
+        return
+    }
+    Invoke-LtChange -Cmdlet $PSCmdlet -Subject $upn -Target $upn -Action "Restore $($missing.Count) direct licence(s)" -ScriptBlock {
+        Set-MgUserLicense -UserId $CloudUser.Id -AddLicenses @($missing | ForEach-Object { @{ SkuId = $_ } }) -RemoveLicenses @() | Out-Null
+    }
+}
+
+function Convert-LtMailboxToRegular {
+    <#
+    .SYNOPSIS
+        Converts a restored leaver's shared mailbox back to a user mailbox and turns off the auto-reply.
+    .DESCRIPTION
+        The mailbox needs a licence within 30 days of conversion, so restore licences first.
+        Delegates added at offboarding keep their access; remove them by hand if no longer wanted.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)]$MailboxInfo)
+    $id = $MailboxInfo.Identity
+
+    if ($MailboxInfo.RecipientTypeDetails -eq 'UserMailbox') {
+        Write-LtLog 'Mailbox is already a user mailbox' -Subject $id
+    }
+    else {
+        Invoke-LtChange -Cmdlet $PSCmdlet -Subject $id -Target $id -Action 'Convert mailbox back to user mailbox' -ScriptBlock {
+            Set-Mailbox -Identity $id -Type Regular -Confirm:$false
+        }
+    }
+    Invoke-LtChange -Cmdlet $PSCmdlet -Subject $id -Target $id -Action 'Turn off auto-reply' -ScriptBlock {
+        Set-MailboxAutoReplyConfiguration -Identity $id -AutoReplyState Disabled -Confirm:$false
     }
 }

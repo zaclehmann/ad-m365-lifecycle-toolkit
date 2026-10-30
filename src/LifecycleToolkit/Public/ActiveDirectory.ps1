@@ -1,7 +1,12 @@
+# PSShouldProcess can't see that these functions call $PSCmdlet.ShouldProcess through Invoke-LtChange
+# (the shared wrapper that also handles WHATIF logging), so it is suppressed for this file.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'ShouldProcess is called via Invoke-LtChange -Cmdlet $PSCmdlet.')]
+param()
+
 $script:LtUserProperties = @(
     'DisplayName', 'GivenName', 'Surname', 'UserPrincipalName', 'mail', 'EmployeeID', 'Department', 'Title',
     'Manager', 'MemberOf', 'HomeDirectory', 'HomeDrive', 'Description', 'Enabled', 'DistinguishedName',
-    'ObjectGUID', 'SID', 'msExchHideFromAddressLists'
+    'ObjectGUID', 'SID', 'msExchHideFromAddressLists', 'AccountExpirationDate'
 )
 
 function Get-LtADUserByEmployeeId {
@@ -26,7 +31,7 @@ function Get-LtADUserByEmployeeId {
 function Find-LtADUser {
     <#
     .SYNOPSIS
-        Finds an AD user by sAMAccountName, UPN or distinguished name. Returns $null if not found.
+        Finds an AD user by sAMAccountName, UPN, distinguished name or object GUID. Returns $null if not found.
     #>
     [CmdletBinding()]
     param(
@@ -34,6 +39,11 @@ function Find-LtADUser {
         [string]$Server
     )
     $sp = Get-LtServerParam $Server
+    $guid = [guid]::Empty
+    if ([guid]::TryParse($Identity, [ref]$guid)) {
+        try { return Get-ADUser -Identity $guid -Properties $script:LtUserProperties @sp }
+        catch { return $null }
+    }
     $id = $Identity.Replace("'", "''")
     $filter = if ($Identity -match '^CN=.+,DC=') { "DistinguishedName -eq '$id'" }
     elseif ($Identity -like '*@*') { "UserPrincipalName -eq '$id'" }
@@ -103,6 +113,7 @@ function Add-LtGroupMembership {
     .SYNOPSIS
         Ensures a user is a member of each listed group. Groups the user is already in are skipped.
     .DESCRIPTION
+        Groups can be given by name, sAMAccountName or distinguished name.
         Each group is checked for existence first, even under -WhatIf, so typos in the config or CSV
         show up in a preview run. Returns an object listing Added, AlreadyMember and Failed groups.
     #>
@@ -122,7 +133,8 @@ function Add-LtGroupMembership {
     $currentDNs = if ($User -and $User.MemberOf) { @($User.MemberOf) } else { @() }
 
     foreach ($name in ($Group | Where-Object { $_ } | Select-Object -Unique)) {
-        $adGroup = Get-ADGroup -Filter "Name -eq '$($name.Replace("'", "''"))' -or SamAccountName -eq '$($name.Replace("'", "''"))'" @sp |
+        $escaped = $name.Replace("'", "''")
+        $adGroup = Get-ADGroup -Filter "Name -eq '$escaped' -or SamAccountName -eq '$escaped' -or DistinguishedName -eq '$escaped'" @sp |
             Select-Object -First 1
         if (-not $adGroup) {
             Write-LtLog "Group '$name' not found in AD" -Level ERROR -Subject $SamAccountName
@@ -208,15 +220,25 @@ function New-LtHomeFolder {
 function Save-LtUserSnapshot {
     <#
     .SYNOPSIS
-        Saves a leaver's key attributes and group memberships to JSON before anything is changed.
+        Saves a leaver's key attributes, groups and licences to JSON before anything is changed.
+    .DESCRIPTION
+        The snapshot is what Invoke-UserRestore.ps1 uses to put a leaver back as they were.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)]$User,
         [Parameter(Mandatory)][string]$Directory,
-        [string]$Ticket
+        [string]$Ticket,
+        $CloudUser,
+        $MailboxInfo
     )
+    $directSkus = @()
+    if ($CloudUser) {
+        $directSkus = @($CloudUser.LicenseAssignmentStates | Where-Object { -not $_.AssignedByGroup } |
+                ForEach-Object { [string]$_.SkuId } | Select-Object -Unique)
+    }
     $snapshot = [ordered]@{
+        SchemaVersion     = 1
         TakenAt           = (Get-Date).ToString('o')
         TakenBy           = "{0}\{1}" -f [Environment]::UserDomainName, [Environment]::UserName
         Ticket            = $Ticket
@@ -232,9 +254,12 @@ function Save-LtUserSnapshot {
         Manager           = $User.Manager
         Description       = $User.Description
         HomeDirectory     = $User.HomeDirectory
+        HiddenFromGal     = [bool]$User.msExchHideFromAddressLists
         MemberOf          = @($User.MemberOf)
+        DirectLicenseSkuIds = $directSkus
+        MailboxType       = $(if ($MailboxInfo) { $MailboxInfo.RecipientTypeDetails } else { $null })
     }
-    $file = Join-Path $Directory ('{0}_{1}.json' -f $User.SamAccountName, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $file = Join-Path $Directory ('{0}_{1}.json' -f $User.SamAccountName, (Get-Date -Format 'yyyyMMdd-HHmmssfff'))
     Invoke-LtChange -Cmdlet $PSCmdlet -Subject $User.SamAccountName -Target $file -Action 'Save pre-change snapshot' -ScriptBlock {
         [void][System.IO.Directory]::CreateDirectory($Directory)
         [System.IO.File]::WriteAllText($file, ($snapshot | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
@@ -366,4 +391,103 @@ function Move-LtHomeFolder {
         $null = & robocopy.exe $Path $destination /E /MOVE /COPY:DATSO /R:1 /W:1 /NP /NFL /NDL
         if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
     }
+}
+
+function Set-LtAccountExpiration {
+    <#
+    .SYNOPSIS
+        Sets the account to expire at the end of the given day (used for leavers with a future leave date).
+    .DESCRIPTION
+        AD expires an account at the start of AccountExpirationDate, so the value set is the day
+        after the leave date. This is a safety net: access stops on time even if the offboarding
+        run on the day is missed.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]$User,
+        [Parameter(Mandatory)][datetime]$LeaveDate,
+        [string]$Server
+    )
+    $sp = Get-LtServerParam $Server
+    $expires = $LeaveDate.Date.AddDays(1)
+    if ($User.AccountExpirationDate -and ([datetime]$User.AccountExpirationDate).Date -eq $expires) {
+        Write-LtLog "Account already set to expire at the end of $($LeaveDate.ToString('yyyy-MM-dd'))" -Subject $User.SamAccountName
+        return
+    }
+    Invoke-LtChange -Cmdlet $PSCmdlet -Subject $User.SamAccountName -Target $User.SamAccountName -Action "Set account to expire at end of $($LeaveDate.ToString('yyyy-MM-dd'))" -ScriptBlock {
+        Set-ADUser -Identity ([string]$User.ObjectGUID) -AccountExpirationDate $expires -Confirm:$false @sp
+    }
+}
+
+function Enable-LtADUser {
+    <#
+    .SYNOPSIS
+        Re-enables a restored leaver: new password, description and GAL visibility back, expiry cleared.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]$User,
+        [Parameter(Mandatory)][securestring]$Password,
+        [AllowEmptyString()][string]$Description,
+        [bool]$HiddenFromGal = $false,
+        [string]$Server
+    )
+    $sp = Get-LtServerParam $Server
+    $sam = $User.SamAccountName
+    $guid = [string]$User.ObjectGUID
+
+    Invoke-LtChange -Cmdlet $PSCmdlet -Subject $sam -Target $sam -Action 'Set new password (change at next logon)' -ScriptBlock {
+        Set-ADAccountPassword -Identity $guid -Reset -NewPassword $Password -Confirm:$false @sp
+        Set-ADUser -Identity $guid -ChangePasswordAtLogon $true -Confirm:$false @sp
+    }
+
+    Invoke-LtChange -Cmdlet $PSCmdlet -Subject $sam -Target $sam -Action 'Restore description, GAL visibility and clear expiry' -ScriptBlock {
+        $setParams = @{ Identity = $guid; AccountExpirationDate = $null; Confirm = $false }
+        $clear = @()
+        if ($Description) { $setParams.Description = $Description } else { $clear += 'description' }
+        if ($HiddenFromGal) { $setParams.Replace = @{ msExchHideFromAddressLists = $true } }
+        elseif ($User.msExchHideFromAddressLists) { $clear += 'msExchHideFromAddressLists' }
+        if ($clear) { $setParams.Clear = $clear }
+        Set-ADUser @setParams @sp
+    }
+
+    if ($User.Enabled) {
+        Write-LtLog 'Account already enabled' -Subject $sam
+    }
+    else {
+        Invoke-LtChange -Cmdlet $PSCmdlet -Subject $sam -Target $sam -Action 'Enable account' -ScriptBlock {
+            Enable-ADAccount -Identity $guid -Confirm:$false @sp
+        }
+    }
+}
+
+function Get-LtUserSnapshot {
+    <#
+    .SYNOPSIS
+        Loads a leaver snapshot from a file, or finds the earliest snapshot for a user in a folder.
+    .DESCRIPTION
+        The earliest snapshot is the one taken before the first offboarding run. A later run
+        (e.g. a re-run to finish a Partial leaver) snapshots an account already stripped of groups.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Path')]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Path')][string]$Path,
+        [Parameter(Mandatory, ParameterSetName = 'Find')][string]$Directory,
+        [Parameter(Mandatory, ParameterSetName = 'Find')][string]$SamAccountName
+    )
+    if ($PSCmdlet.ParameterSetName -eq 'Find') {
+        $files = @(Get-ChildItem -Path $Directory -Filter "$SamAccountName`_*.json" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.BaseName -match "^$([regex]::Escape($SamAccountName))_\d{8}-\d{6,9}$" } |
+                Sort-Object Name)
+        if (-not $files) { throw "No snapshot for '$SamAccountName' in $Directory" }
+        $Path = $files[0].FullName
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Snapshot not found: $Path" }
+
+    $snapshot = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($field in 'SamAccountName', 'ObjectGUID', 'DistinguishedName') {
+        if (-not $snapshot.$field) { throw "Snapshot '$Path' has no $field; is it a toolkit snapshot?" }
+    }
+    $snapshot | Add-Member -NotePropertyName SourcePath -NotePropertyValue $Path -Force
+    $snapshot
 }

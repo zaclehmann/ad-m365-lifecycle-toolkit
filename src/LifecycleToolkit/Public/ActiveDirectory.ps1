@@ -436,18 +436,19 @@ function Enable-LtADUser {
     $sam = $User.SamAccountName
     $guid = [string]$User.ObjectGUID
 
+    $passwordParams = @{ Identity = $guid; Reset = $true; NewPassword = $Password; Confirm = $false }
     Invoke-LtChange -Cmdlet $PSCmdlet -Subject $sam -Target $sam -Action 'Set new password (change at next logon)' -ScriptBlock {
-        Set-ADAccountPassword -Identity $guid -Reset -NewPassword $Password -Confirm:$false @sp
+        Set-ADAccountPassword @passwordParams @sp
         Set-ADUser -Identity $guid -ChangePasswordAtLogon $true -Confirm:$false @sp
     }
 
+    $setParams = @{ Identity = $guid; AccountExpirationDate = $null; Confirm = $false }
+    $clear = @()
+    if ($Description) { $setParams.Description = $Description } else { $clear += 'description' }
+    if ($HiddenFromGal) { $setParams.Replace = @{ msExchHideFromAddressLists = $true } }
+    elseif ($User.msExchHideFromAddressLists) { $clear += 'msExchHideFromAddressLists' }
+    if ($clear) { $setParams.Clear = $clear }
     Invoke-LtChange -Cmdlet $PSCmdlet -Subject $sam -Target $sam -Action 'Restore description, GAL visibility and clear expiry' -ScriptBlock {
-        $setParams = @{ Identity = $guid; AccountExpirationDate = $null; Confirm = $false }
-        $clear = @()
-        if ($Description) { $setParams.Description = $Description } else { $clear += 'description' }
-        if ($HiddenFromGal) { $setParams.Replace = @{ msExchHideFromAddressLists = $true } }
-        elseif ($User.msExchHideFromAddressLists) { $clear += 'msExchHideFromAddressLists' }
-        if ($clear) { $setParams.Clear = $clear }
         Set-ADUser @setParams @sp
     }
 

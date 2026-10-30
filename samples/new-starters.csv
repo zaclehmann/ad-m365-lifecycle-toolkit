@@ -1,0 +1,4 @@
+FirstName,LastName,EmployeeId,Department,JobTitle,Office,Manager,Groups,UsageLocation,LicenseSku
+Jane,Smith,E10231,Finance,Accounts Assistant,London,mark.jones,,GB,
+José,O'Brien,E10232,IT,Service Desk Analyst,Manchester,sara.khan,GG_VPN_Users;GG_Remote_Desktop,GB,
+Priya,Patel,E10233,Sales,Account Executive,London,mark.jones,GG_VPN_Users,GB,SPE_E5

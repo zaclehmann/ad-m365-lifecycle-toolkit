@@ -51,4 +51,10 @@
     CmdletsToExport   = @()
     VariablesToExport = @()
     AliasesToExport   = @()
+    PrivateData       = @{
+        PSData = @{
+            LicenseUri = 'https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-/blob/main/LICENSE'
+            ProjectUri = 'https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-'
+        }
+    }
 }

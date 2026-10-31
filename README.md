@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-/actions/workflows/ci.yml/badge.svg)](https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-/actions/workflows/ci.yml)
 ![PowerShell 5.1 | 7](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE?logo=powershell&logoColor=white)
+[![License: MIT-0](https://img.shields.io/badge/License-MIT--0-green.svg)](LICENSE)
 
 Automates joiners and leavers for a **hybrid** environment: on-prem Active Directory synced to Entra ID, with mailboxes in Exchange Online.
 
@@ -189,3 +190,7 @@ The integration tests run the real scripts against `tests/Fakes/FakeEnvironment.
 - **Not handled:** OneDrive/Teams handover for leavers, sending initial passwords to managers, and reading starters straight from an HR system.
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
+
+## License
+
+[MIT No Attribution](LICENSE). Use, copy, modify and distribute this code for any purpose, with no conditions.

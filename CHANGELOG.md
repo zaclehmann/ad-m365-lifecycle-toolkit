@@ -10,7 +10,7 @@ All notable changes to this project are documented here. The format follows
 - Scheduled leavers: an optional `LeaveDate` (CSV column or `-LeaveDate`). A future date sets the account to expire at the end of that day and reports the leaver as `Scheduled`.
 - Snapshots now record direct licence SKUs and the mailbox type, so a restore can put them back.
 - The demo script now covers scheduling and restore.
-- CI badge, `.gitattributes`, and this changelog.
+- CI badge, `.gitattributes`, this changelog, and an MIT No Attribution licence.
 
 ### Changed
 - Initial passwords are built directly into a `SecureString`; there is no plain-text conversion.

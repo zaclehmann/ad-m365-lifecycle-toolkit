@@ -2,8 +2,6 @@ function Import-LtConfig {
     <#
     .SYNOPSIS
         Loads and validates the toolkit configuration (.psd1).
-    .DESCRIPTION
-        Relative paths in the Logging and Offboarding sections are resolved against RootPath.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -59,7 +57,6 @@ function Import-LtConfig {
         throw ("Invalid config '{0}':`n - {1}" -f $Path, ($problems -join "`n - "))
     }
 
-    # Defaults for optional settings, so callers never need null checks.
     if (-not $config.ActiveDirectory.PasswordLength) { $config.ActiveDirectory.PasswordLength = 16 }
     if (-not $config.ActiveDirectory.DepartmentOUs) { $config.ActiveDirectory.DepartmentOUs = @{} }
     if (-not $config.Groups.Baseline) { $config.Groups.Baseline = @() }
@@ -87,7 +84,6 @@ function Import-LtCsv {
     )
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "CSV file not found: $Path" }
 
-    # UTF8 so accented names survive on Windows PowerShell 5.1 (which defaults to ANSI).
     $rows = @(Import-Csv -LiteralPath $Path -Encoding UTF8)
     if ($rows.Count -eq 0) { throw "CSV file '$Path' has no data rows" }
 
@@ -152,8 +148,6 @@ function ConvertTo-LtAsciiName {
             [void]$sb.Append($ch)
         }
     }
-    # Letters with no decomposed form are mapped by hand before the final filter. Written as char
-    # codes so this file stays ASCII (Windows PowerShell 5.1 reads BOM-less files as ANSI).
     $text = $sb.ToString().ToLowerInvariant()
     $text = $text.Replace([string][char]0x00DF, 'ss').Replace([string][char]0x00F8, 'o').Replace([string][char]0x00E6, 'ae').Replace([string][char]0x0142, 'l')
     ($text -replace '[^a-z0-9-]', '').Trim('-')
@@ -163,8 +157,6 @@ function New-LtPassword {
     <#
     .SYNOPSIS
         Generates a cryptographically random password with upper, lower, digit and symbol characters.
-    .DESCRIPTION
-        Ambiguous characters (0/O, 1/l/I) are left out so the password can be read out over the phone.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Generates a value only.')]
     [CmdletBinding()]
@@ -177,7 +169,6 @@ function New-LtPassword {
     $all = -join $sets
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
-        # Unbiased random index in [0, max) using rejection sampling.
         $next = {
             param([int]$max)
             $buffer = New-Object byte[] 4
@@ -193,7 +184,6 @@ function New-LtPassword {
         foreach ($set in $sets) { $chars.Add($set[(& $next $set.Length)]) }
         while ($chars.Count -lt $Length) { $chars.Add($all[(& $next $all.Length)]) }
 
-        # Fisher-Yates shuffle so the guaranteed characters aren't always at the start.
         for ($i = $chars.Count - 1; $i -gt 0; $i--) {
             $j = & $next ($i + 1)
             $tmp = $chars[$i]; $chars[$i] = $chars[$j]; $chars[$j] = $tmp
@@ -205,7 +195,6 @@ function New-LtPassword {
 
     if ($AsPlainText) { return -join $chars }
 
-    # Build the SecureString one character at a time so the password never exists as a plain string.
     $secure = New-Object System.Security.SecureString
     foreach ($c in $chars) { $secure.AppendChar($c) }
     $chars.Clear()
@@ -228,10 +217,6 @@ function New-LtSamAccountName {
     <#
     .SYNOPSIS
         Builds a unique sAMAccountName from the configured format, adding 2, 3... on a clash.
-    .DESCRIPTION
-        A name is taken if an AD user already has it as sAMAccountName or UPN prefix, or if it is
-        in the Reserved set (names already handed out earlier in this run - matters under -WhatIf,
-        where nothing is actually created). The chosen name is added to Reserved.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Generates a value only.')]
     [CmdletBinding()]
@@ -258,7 +243,6 @@ function New-LtSamAccountName {
 
     for ($n = 1; $n -lt 100; $n++) {
         $suffix = if ($n -eq 1) { '' } else { [string]$n }
-        # sAMAccountName is limited to 20 characters.
         $stem = $base.Substring(0, [Math]::Min($base.Length, 20 - $suffix.Length)).TrimEnd('.', '-')
         $candidate = $stem + $suffix
 

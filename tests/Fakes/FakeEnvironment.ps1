@@ -16,9 +16,9 @@ $global:FakeIsWindows = $PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows
 function global:Reset-FakeEnvironment {
     $global:FakeEnv = @{
         Users        = New-Object System.Collections.Generic.List[object]
-        Groups       = @{}       # name -> @{ DN; Members = HashSet of ObjectGUID }
-        CloudUsers   = @{}       # UPN -> object
-        Mailboxes    = @{}       # UPN -> object
+        Groups       = @{}
+        CloudUsers   = @{}
+        Mailboxes    = @{}
         Permissions  = New-Object System.Collections.Generic.List[object]
         AutoReplies  = @{}
         Skus         = @(
@@ -28,7 +28,7 @@ function global:Reset-FakeEnvironment {
         Changes      = New-Object System.Collections.Generic.List[string]
         GraphContext = $null
         ExoConnected = $false
-        SyncOnDemand = $true     # a delta sync copies AD users to the cloud straight away
+        SyncOnDemand = $true
         FailMailboxConversion = $false
         NextRid      = 1100
     }
@@ -112,7 +112,6 @@ function global:Get-FakeUserRecord([string]$Identity) {
 }
 
 function global:ConvertTo-FakeADUser($Record) {
-    # Return a copy with MemberOf calculated, like a fresh LDAP read.
     $copy = $Record.PSObject.Copy()
     $memberOf = @($global:FakeEnv.Groups.Values | Where-Object { $_.Members.Contains([string]$Record.ObjectGUID) } | ForEach-Object { $_.DN })
     $copy | Add-Member -NotePropertyName MemberOf -NotePropertyValue $memberOf -Force
@@ -124,12 +123,10 @@ function global:Test-FakeFilter($Object, [string]$Filter) {
     foreach ($c in $clauses) {
         $prop = $c.Groups[1].Value
         $value = $c.Groups[2].Value.Replace("''", "'")
-        if ([string]$Object.$prop -eq $value) { return $true }   # all toolkit filters are -eq joined by -or
+        if ([string]$Object.$prop -eq $value) { return $true }
     }
     $false
 }
-
-# ---- ActiveDirectory --------------------------------------------------------------------------
 
 function global:Get-ADUser {
     param($Identity, [string]$Filter, $Properties, [string]$Server, [string]$SearchBase, [string]$SearchScope)
@@ -224,15 +221,11 @@ function global:Move-ADObject {
     Add-FakeChange "Move-ADObject $($u.SamAccountName)"
 }
 
-# ---- Entra Connect (Invoke-Command to the sync server) ----------------------------------------
-
 function global:Invoke-Command {
     param($ComputerName, $ScriptBlock, $ErrorAction)
     Add-FakeChange "DeltaSync $ComputerName"
     if ($global:FakeEnv.SyncOnDemand) { foreach ($u in $global:FakeEnv.Users) { Sync-FakeUser $u } }
 }
-
-# ---- Microsoft Graph --------------------------------------------------------------------------
 
 function global:Get-MgContext { $global:FakeEnv.GraphContext }
 function global:Connect-MgGraph {
@@ -275,8 +268,6 @@ function global:Revoke-MgUserSignInSession {
     Add-FakeChange "Revoke-MgUserSignInSession $((Find-FakeCloudUser $UserId).UserPrincipalName)"
 }
 
-# ---- Exchange Online --------------------------------------------------------------------------
-
 function global:Get-ConnectionInformation { if ($global:FakeEnv.ExoConnected) { [pscustomobject]@{ State = 'Connected'; Organization = 'contoso.onmicrosoft.com' } } }
 function global:Connect-ExchangeOnline { param($AppId, $CertificateThumbprint, $Organization, $ShowBanner) $global:FakeEnv.ExoConnected = $true }
 
@@ -315,12 +306,9 @@ function global:Set-MailboxAutoReplyConfiguration {
     Add-FakeChange "Set-MailboxAutoReplyConfiguration $Identity"
 }
 
-# ---- File system ACLs (Windows-only APIs) -----------------------------------------------------
 if (-not $global:FakeIsWindows) {
     function global:Get-Acl { param($LiteralPath) $null }
 }
-
-# ---- Test config ------------------------------------------------------------------------------
 
 function global:New-FakeConfig {
     <#
@@ -363,10 +351,8 @@ function global:Initialize-FakeDirectory {
         -Groups 'GG_AllStaff', 'GG_Sales', 'LIC_M365_E3', 'Domain Users'
     $null = Add-FakeUser -Sam 'amy.wong' -GivenName 'Amy' -Surname 'Wong' -EmployeeId 'E00004' -ManagerSam 'mark.jones' -WithMailbox -MailboxGB 62 `
         -Groups 'GG_AllStaff', 'GG_Sales', 'GG_CRM_Users'
-    # A namesake for the first starter, so the username clash logic is exercised.
     $null = Add-FakeUser -Sam 'jane.smith' -GivenName 'Jane' -Surname 'Smith' -EmployeeId 'E09999' -Groups 'GG_AllStaff'
 
-    # amy.wong has a direct E3 licence.
     $amy = $global:FakeEnv.CloudUsers['amy.wong@contoso.com']
     $amy.AssignedLicenses = @([pscustomobject]@{ SkuId = '05e9a617-0261-4cee-bb44-138d3ef5d965' })
     $amy.LicenseAssignmentStates = @([pscustomobject]@{ SkuId = '05e9a617-0261-4cee-bb44-138d3ef5d965'; AssignedByGroup = $null })

@@ -21,7 +21,6 @@ function Initialize-LtLog {
         [int]$RetentionDays = 0
     )
 
-    # Logging must still happen under -WhatIf, so use .NET instead of cmdlets that honour ShouldProcess.
     [void][System.IO.Directory]::CreateDirectory($Directory)
 
     if ($RetentionDays -gt 0) {
@@ -59,7 +58,6 @@ function Write-LtLog {
     .EXAMPLE
         Write-LtLog 'Created AD user' -Level SUCCESS -Subject 'jane.smith'
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Coloured operator console output is intended.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, Position = 0)][AllowEmptyString()][string]$Message,
@@ -105,7 +103,7 @@ function New-LtResult {
         Actions           = New-Object System.Collections.Generic.List[string]
         Warnings          = New-Object System.Collections.Generic.List[string]
         Errors            = New-Object System.Collections.Generic.List[string]
-        InitialPassword   = $null   # SecureString; never exported
+        InitialPassword   = $null
     }
 }
 

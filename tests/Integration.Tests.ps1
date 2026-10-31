@@ -1,12 +1,10 @@
 ﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
-# End-to-end tests: run the real entry scripts against the in-memory fake directory/tenant.
 
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $onboard = Join-Path $repoRoot 'Invoke-Onboarding.ps1'
     $offboard = Join-Path $repoRoot 'Invoke-Offboarding.ps1'
     $starters = Join-Path $repoRoot 'samples/new-starters.csv'
-    # Fixed copy of the two immediate leavers from samples/leavers.csv, so editing the sample can't break tests.
     $leavers = Join-Path $TestDrive 'leavers.csv'
     @(
         'Identity,Ticket,LeaveDate,Delegate,AutoReplyMessage'
@@ -298,7 +296,6 @@ Describe 'Restore' {
             $run = New-TestRun
             $before = Get-ADUser -Identity 'tom.baker'
             & $offboard -Identity 'tom.baker' -Ticket 'INC1' -ConfigPath $run.Config 6>$null
-            # A second run (e.g. finishing a Partial) snapshots the already-stripped account.
             & $offboard -Identity 'tom.baker' -Ticket 'INC1' -ConfigPath $run.Config 6>$null
             $FakeEnv.Changes.Clear()
             $result = & $restore -Identity 'tom.baker' -Ticket 'INC2' -ConfigPath $run.Config -PassThru 6>$null
@@ -334,7 +331,6 @@ Describe 'Restore' {
         It 'puts back the licences removed at offboarding' {
             $run = New-TestRun
             $amy = $FakeEnv.CloudUsers['amy.wong@contoso.com']
-            # Shrink the mailbox so offboarding removes the licence.
             $FakeEnv.Mailboxes['amy.wong@contoso.com'].TotalItemSize = '1 GB (1,073,741,824 bytes)'
             & $offboard -Identity 'amy.wong' -Ticket 'INC1' -ConfigPath $run.Config 6>$null
             $amy.AssignedLicenses | Should -BeNullOrEmpty

@@ -87,14 +87,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src\LifecycleToolkit\LifecycleToolkit.psd1') -Force
 
-# Preference variables don't flow into script-module functions, so forward -WhatIf/-Confirm explicitly.
 $sp = @{}
 foreach ($name in 'WhatIf', 'Confirm') {
     if ($PSBoundParameters.ContainsKey($name)) { $sp[$name] = $PSBoundParameters[$name] }
 }
 $isPreview = [bool]$WhatIfPreference
 
-# ---- Setup -----------------------------------------------------------------------------------
 try {
     $config = Import-LtConfig -Path $ConfigPath -RootPath $PSScriptRoot
     $logFile = Initialize-LtLog -Directory $config.Logging.Path -Operation 'Offboarding' -RetentionDays $config.Logging.RetentionDays
@@ -130,7 +128,6 @@ catch {
     exit 2
 }
 
-# ---- Per leaver ------------------------------------------------------------------------------
 $results = New-Object System.Collections.Generic.List[object]
 $rowNumber = if ($PSCmdlet.ParameterSetName -eq 'Single') { 0 } else { 1 }
 
@@ -161,7 +158,6 @@ foreach ($row in $rows) {
         $result.SamAccountName = $sam
         $result.UserPrincipalName = $user.UserPrincipalName
 
-        # Future leave date: set the account to expire as a safety net and stop here.
         if ($leaveDay -and $leaveDay.Date -gt (Get-Date).Date) {
             Write-LtLog "Leave date $($leaveDay.ToString('yyyy-MM-dd')) is in the future; scheduling only" -Subject $sam
             Set-LtAccountExpiration @sp -User $user -LeaveDate $leaveDay -Server $ad.Server
@@ -171,7 +167,6 @@ foreach ($row in $rows) {
         }
         Write-LtLog "Offboarding $($user.DisplayName) <$($user.UserPrincipalName)> ticket $ticketRef" -Subject $sam
 
-        # Look everything up before changing anything.
         $manager = if ($user.Manager) { Find-LtADUser -Identity $user.Manager -Server $ad.Server } else { $null }
         $cloudUser = $null
         $mailbox = $null
@@ -185,24 +180,19 @@ foreach ($row in $rows) {
             else { Add-LtResultMessage $result Warning 'No Exchange Online mailbox found' }
         }
 
-        # 1. Snapshot -------------------------------------------------------------------------
         $snapshot = Save-LtUserSnapshot @sp -User $user -Directory $off.SnapshotPath -Ticket $ticketRef -CloudUser $cloudUser -MailboxInfo $mailbox
         Add-LtResultMessage $result Action "Snapshot $snapshot" -Preview:$isPreview
 
-        # 2. Lock the account -----------------------------------------------------------------
         $description = 'Leaver {0} - {1} - by {2}' -f (Get-Date -Format 'yyyy-MM-dd'), $ticketRef, [Environment]::UserName
         Disable-LtADUser @sp -User $user -Description $description -HideFromGal:([bool]$ad.HideFromGalOnLeave) -Server $ad.Server
         $disabled = $true
         Add-LtResultMessage $result Action 'Password reset, account disabled, description set' -Preview:$isPreview
 
-        # 3. Revoke sessions ------------------------------------------------------------------
         if ($cloudUser -and $off.RevokeSessions) {
             Revoke-LtSignInSession @sp -CloudUser $cloudUser
             Add-LtResultMessage $result Action 'Sign-in sessions revoked' -Preview:$isPreview
         }
 
-        # 4. Mailbox --------------------------------------------------------------------------
-        # Everything after this point can cost the mailbox its licence, so it must be shared first.
         $mailboxSafe = -not $mailbox -or -not $off.ConvertMailboxToShared
         if ($mailbox -and $off.ConvertMailboxToShared) {
             $delegateName = Get-LtCsvValue $row 'Delegate'
@@ -231,7 +221,6 @@ foreach ($row in $rows) {
             }
         }
 
-        # 5. Groups ---------------------------------------------------------------------------
         if ($SkipCloud -and $m365.Enabled) {
             Add-LtResultMessage $result Warning 'Groups not removed: -SkipCloud means the mailbox was not converted, and a licence group may be among them'
         }
@@ -243,7 +232,6 @@ foreach ($row in $rows) {
             foreach ($g in $groupOutcome.Failed) { Add-LtResultMessage $result Error "Could not remove from group '$g'" -NoLog }
         }
 
-        # 6. Licences -------------------------------------------------------------------------
         if ($cloudUser -and $off.RemoveLicenses -and $mailboxSafe) {
             $limitBytes = [long]$off.SharedMailboxSizeLimitGB * 1GB
             if ($mailbox -and ($mailbox.SizeBytes -ge $limitBytes -or $mailbox.LitigationHoldEnabled -or $mailbox.HasInPlaceHold)) {
@@ -255,7 +243,6 @@ foreach ($row in $rows) {
             }
         }
 
-        # 7. Home folder ----------------------------------------------------------------------
         if ($config.HomeFolder.Enabled -and $config.HomeFolder.LeaverAction -eq 'Archive' -and $user.HomeDirectory) {
             try {
                 Move-LtHomeFolder @sp -Path $user.HomeDirectory -ArchiveRoot $config.HomeFolder.ArchivePath -Subject $sam
@@ -264,7 +251,6 @@ foreach ($row in $rows) {
             catch { Add-LtResultMessage $result Error "Home folder archive: $($_.Exception.Message)" }
         }
 
-        # 8. Move OU (last: it changes the DN) ------------------------------------------------
         Move-LtADUserToOU @sp -User $user -TargetOU $ad.DisabledUsersOU -Server $ad.Server
         Add-LtResultMessage $result Action "Moved to $($ad.DisabledUsersOU)" -Preview:$isPreview
     }
@@ -274,12 +260,10 @@ foreach ($row in $rows) {
     }
 }
 
-# Push the disabled state to Entra ID now rather than waiting up to 30 minutes.
 if ($useCloud -and $m365.DirSync.Enabled -and $m365.DirSync.Server -and ($results | Where-Object { $_.Status -notin 'Failed', 'Scheduled' })) {
     Start-LtDirectorySync @sp -Server $m365.DirSync.Server
 }
 
-# ---- Final status, report and summary --------------------------------------------------------
 foreach ($r in $results) {
     if ($r.Status -ne 'Pending') { continue }
     $r.Status = if ($r.Errors.Count) { if ($isPreview) { 'Failed' } else { 'Partial' } } elseif ($isPreview) { 'WhatIf' } else { 'Success' }
@@ -293,7 +277,6 @@ Write-LtLog "Log:    $logFile"
 
 $exitCode = if ($results.Status -match 'Failed|Partial') { 1 } else { 0 }
 if ($PassThru) {
-    # 'exit' would cut off a downstream pipeline (| Format-Table), so return normally instead.
     $global:LASTEXITCODE = $exitCode
     return $results
 }

@@ -58,14 +58,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src\LifecycleToolkit\LifecycleToolkit.psd1') -Force
 
-# Preference variables don't flow into script-module functions, so forward -WhatIf/-Confirm explicitly.
 $sp = @{}
 foreach ($name in 'WhatIf', 'Confirm') {
     if ($PSBoundParameters.ContainsKey($name)) { $sp[$name] = $PSBoundParameters[$name] }
 }
 $isPreview = [bool]$WhatIfPreference
 
-# ---- Setup -----------------------------------------------------------------------------------
 try {
     $config = Import-LtConfig -Path $ConfigPath -RootPath $PSScriptRoot
     $logFile = Initialize-LtLog -Directory $config.Logging.Path -Operation 'Restore' -RetentionDays $config.Logging.RetentionDays
@@ -94,11 +92,9 @@ catch {
     exit 2
 }
 
-# ---- Restore ---------------------------------------------------------------------------------
 $result = New-LtResult -Name $snapshot.SamAccountName -Row 1
 $enabled = $false
 try {
-    # Look up by GUID: the account was moved (new DN) and could have been renamed since.
     $user = Find-LtADUser -Identity $snapshot.ObjectGUID -Server $ad.Server
     if (-not $user) { throw "The account in the snapshot (GUID $($snapshot.ObjectGUID)) no longer exists in AD" }
     $sam = $user.SamAccountName
@@ -106,12 +102,10 @@ try {
     $result.UserPrincipalName = $user.UserPrincipalName
     Write-LtLog "Restoring $($user.DisplayName) <$($user.UserPrincipalName)>" -Subject $sam
 
-    # 1. Original OU ---------------------------------------------------------------------------
     $originalOU = ($snapshot.DistinguishedName -split '(?<!\\),', 2)[1]
     Move-LtADUserToOU @sp -User $user -TargetOU $originalOU -Server $ad.Server
     Add-LtResultMessage $result Action "Moved back to $originalOU" -Preview:$isPreview
 
-    # 2. Groups --------------------------------------------------------------------------------
     $groups = @($snapshot.MemberOf | Where-Object { $_ })
     $groupOutcome = Add-LtGroupMembership @sp -SamAccountName $sam -Group $groups -User $user -Server $ad.Server
     if ($groupOutcome.Added.Count) {
@@ -119,14 +113,12 @@ try {
     }
     foreach ($g in $groupOutcome.Failed) { Add-LtResultMessage $result Error "Group '$g' could not be restored (deleted since?)" -NoLog }
 
-    # 3 + 4. Attributes, password, enable -----------------------------------------------------
     $result.InitialPassword = New-LtPassword -Length $ad.PasswordLength
     Enable-LtADUser @sp -User $user -Password $result.InitialPassword -Description $snapshot.Description `
         -HiddenFromGal ([bool]$snapshot.HiddenFromGal) -Server $ad.Server
     $enabled = -not $isPreview
     Add-LtResultMessage $result Action 'Description restored, new password set, account enabled' -Preview:$isPreview
 
-    # 5. Cloud ---------------------------------------------------------------------------------
     if ($useCloud) {
         $cloudUser = Get-LtCloudUser -UserPrincipalName $user.UserPrincipalName
         if (-not $cloudUser) {
@@ -164,14 +156,12 @@ if ($result.Status -eq 'Pending') {
     $result.Status = if ($result.Errors.Count) { if ($isPreview) { 'Failed' } else { 'Partial' } } elseif ($isPreview) { 'WhatIf' } else { 'Success' }
 }
 
-# ---- Report and summary ----------------------------------------------------------------------
 $reportPath = Export-LtReport -Results @($result) -Directory $config.Logging.ReportPath -Operation 'Restore'
 Write-LtLog "Finished. $($result.SamAccountName): $($result.Status)" -Level $(if ($result.Status -match 'Failed|Partial') { 'WARN' } else { 'SUCCESS' })
 Write-LtLog "Report: $reportPath"
 Write-LtLog "Log:    $logFile"
 
 if ($result.Status -in 'Success', 'Partial' -and $result.InitialPassword) {
-    # Deliberately shown on screen only: not logged, not in the report.
     Write-Host ''
     Write-Host 'New password (shown once; user must change at first logon). Hand over securely:' -ForegroundColor Yellow
     Write-Host ("  {0}  {1}" -f $result.SamAccountName, (ConvertFrom-LtSecureString $result.InitialPassword))
@@ -180,7 +170,6 @@ if ($result.Status -in 'Success', 'Partial' -and $result.InitialPassword) {
 
 $exitCode = if ($result.Status -match 'Failed|Partial') { 1 } else { 0 }
 if ($PassThru) {
-    # 'exit' would cut off a downstream pipeline (| Format-List), so return normally instead.
     $global:LASTEXITCODE = $exitCode
     return $result
 }

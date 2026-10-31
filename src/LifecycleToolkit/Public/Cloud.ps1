@@ -1,5 +1,3 @@
-# PSShouldProcess can't see that these functions call $PSCmdlet.ShouldProcess through Invoke-LtChange
-# (the shared wrapper that also handles WHATIF logging), so it is suppressed for this file.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'ShouldProcess is called via Invoke-LtChange -Cmdlet $PSCmdlet.')]
 param()
 
@@ -9,9 +7,6 @@ function Connect-LtCloud {
     <#
     .SYNOPSIS
         Connects to Microsoft Graph and/or Exchange Online, unless already connected.
-    .DESCRIPTION
-        Uses app-only certificate auth when ClientId and CertificateThumbprint are set in the
-        config (needed for scheduled runs), otherwise falls back to interactive sign-in.
     #>
     [CmdletBinding()]
     param(
@@ -66,9 +61,6 @@ function Start-LtDirectorySync {
     <#
     .SYNOPSIS
         Triggers an Entra Connect delta sync on the sync server so changes reach the cloud sooner.
-    .DESCRIPTION
-        A sync that is already running is not an error: the change will be picked up by that cycle
-        or the next one.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][string]$Server)
@@ -195,7 +187,6 @@ function Remove-LtM365License {
     param([Parameter(Mandatory)]$CloudUser)
 
     $upn = $CloudUser.UserPrincipalName
-    # Trying to remove a group-inherited licence directly is an error, so only take direct ones.
     $direct = @($CloudUser.LicenseAssignmentStates |
             Where-Object { -not $_.AssignedByGroup } |
             Select-Object -ExpandProperty SkuId -Unique)
@@ -324,9 +315,6 @@ function Convert-LtMailboxToRegular {
     <#
     .SYNOPSIS
         Converts a restored leaver's shared mailbox back to a user mailbox and turns off the auto-reply.
-    .DESCRIPTION
-        The mailbox needs a licence within 30 days of conversion, so restore licences first.
-        Delegates added at offboarding keep their access; remove them by hand if no longer wanted.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)]$MailboxInfo)

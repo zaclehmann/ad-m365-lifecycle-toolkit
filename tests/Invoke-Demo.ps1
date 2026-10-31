@@ -3,8 +3,7 @@
     Runs the toolkit end to end against an in-memory fake AD and M365 tenant. No domain needed.
 
 .DESCRIPTION
-    Handy for trying the toolkit out, or demoing it in an interview from a laptop.
-    Everything (logs, reports, snapshots, "home folders") goes to a temp folder.
+    Logs, reports, snapshots and home folders are written to a temp folder.
 
 .EXAMPLE
     ./tests/Invoke-Demo.ps1

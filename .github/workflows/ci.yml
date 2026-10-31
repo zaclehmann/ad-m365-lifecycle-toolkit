@@ -33,7 +33,7 @@ jobs:
           - os: windows-latest
             shell: pwsh
           - os: windows-latest
-            shell: powershell   # Windows PowerShell 5.1
+            shell: powershell
     runs-on: ${{ matrix.os }}
     defaults:
       run:

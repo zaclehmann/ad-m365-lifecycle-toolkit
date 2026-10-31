@@ -1,11 +1,9 @@
 ﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
-# Unit tests for the module's helper functions. Run: Invoke-Pester ./tests
 
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     Import-Module (Join-Path $repoRoot 'src/LifecycleToolkit/LifecycleToolkit.psd1') -Force
 
-    # Mock needs the command to exist; RSAT isn't installed on CI runners.
     foreach ($name in 'Get-ADUser', 'New-ADUser') {
         if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
             New-Item -Path "function:global:$name" -Value { param($Filter, $Identity, $Properties, $Server, $SearchBase, $SearchScope) } | Out-Null
@@ -192,7 +190,6 @@ Describe 'Get-LtUserSnapshot' {
             @{ SamAccountName = 'tom.baker'; ObjectGUID = [guid]::NewGuid().ToString(); DistinguishedName = 'CN=Tom Baker,OU=Users,DC=x'; Stamp = $stamp } |
                 ConvertTo-Json | Set-Content (Join-Path $dir "tom.baker_$stamp.json")
         }
-        # Must not match tom.baker: a different user whose name starts the same way.
         @{ SamAccountName = 'tom.baker2'; ObjectGUID = 'x'; DistinguishedName = 'y'; Stamp = 'other' } |
             ConvertTo-Json | Set-Content (Join-Path $dir 'tom.baker2_20261001-000000000.json')
     }

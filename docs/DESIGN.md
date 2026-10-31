@@ -1,6 +1,6 @@
 # Design and plan
 
-This document is the plan the toolkit was built from. It explains what the toolkit does and why each decision was made, so you can talk through it in an interview.
+What the toolkit does, and why it is built the way it is.
 
 ## 1. Problem
 

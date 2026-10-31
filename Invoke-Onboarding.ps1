@@ -57,14 +57,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src\LifecycleToolkit\LifecycleToolkit.psd1') -Force
 
-# Preference variables don't flow into script-module functions, so forward -WhatIf/-Confirm explicitly.
 $sp = @{}
 foreach ($name in 'WhatIf', 'Confirm') {
     if ($PSBoundParameters.ContainsKey($name)) { $sp[$name] = $PSBoundParameters[$name] }
 }
 $isPreview = [bool]$WhatIfPreference
 
-# ---- Setup -----------------------------------------------------------------------------------
 try {
     $config = Import-LtConfig -Path $ConfigPath -RootPath $PSScriptRoot
     $logFile = Initialize-LtLog -Directory $config.Logging.Path -Operation 'Onboarding' -RetentionDays $config.Logging.RetentionDays
@@ -91,10 +89,8 @@ catch {
     exit 2
 }
 
-# ---- Pre-flight: duplicate EmployeeIds in the CSV --------------------------------------------
 $duplicateIds = $rows | Group-Object EmployeeId | Where-Object { $_.Name -and $_.Count -gt 1 } | ForEach-Object Name
 
-# ---- Per starter -----------------------------------------------------------------------------
 $reserved = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 $results = New-Object System.Collections.Generic.List[object]
 $passwords = New-Object System.Collections.Generic.List[object]
@@ -102,7 +98,7 @@ $needsLicence = New-Object System.Collections.Generic.List[object]
 $rowNumber = 1
 
 foreach ($row in $rows) {
-    $rowNumber++  # row 1 is the header
+    $rowNumber++
     $first = Get-LtCsvValue $row 'FirstName'
     $last = Get-LtCsvValue $row 'LastName'
     $employeeId = Get-LtCsvValue $row 'EmployeeId'
@@ -112,7 +108,6 @@ foreach ($row in $rows) {
     $userCreated = $false
 
     try {
-        # 1. Validate --------------------------------------------------------------------------
         $problems = @()
         foreach ($col in 'FirstName', 'LastName', 'EmployeeId', 'Department') {
             if (-not (Get-LtCsvValue $row $col)) { $problems += "$col is empty" }
@@ -142,7 +137,6 @@ foreach ($row in $rows) {
             else { Add-LtResultMessage $result Warning "Manager '$managerName' not found in AD; manager left blank" }
         }
 
-        # 2. AD account ------------------------------------------------------------------------
         $user = Get-LtADUserByEmployeeId -EmployeeId $employeeId -Server $ad.Server
         if ($user) {
             $result.SamAccountName = $user.SamAccountName
@@ -175,7 +169,6 @@ foreach ($row in $rows) {
         }
         $sam = $result.SamAccountName
 
-        # 3. Groups ----------------------------------------------------------------------------
         $groups = @($config.Groups.Baseline) + @($config.Groups.Department[$department])
         $csvGroups = Get-LtCsvValue $row 'Groups'
         if ($csvGroups) { $groups += $csvGroups -split '[;,]' | ForEach-Object { $_.Trim() } }
@@ -188,10 +181,8 @@ foreach ($row in $rows) {
         }
         foreach ($g in $groupOutcome.Failed) { Add-LtResultMessage $result Error "Group '$g' could not be added" -NoLog }
 
-        # 4. Home folder -----------------------------------------------------------------------
         if ($config.HomeFolder.Enabled) {
             try {
-                # Re-read the user so we have the SID and current HomeDirectory.
                 $freshUser = if ($user) { Get-LtADUserByEmployeeId -EmployeeId $employeeId -Server $ad.Server } else { $null }
                 $homePath = New-LtHomeFolder @sp -SamAccountName $sam -RootPath $config.HomeFolder.RootPath `
                     -DriveLetter $config.HomeFolder.DriveLetter -AccessRights $config.HomeFolder.AccessRights `
@@ -203,18 +194,16 @@ foreach ($row in $rows) {
             }
         }
 
-        # 5. Licence ---------------------------------------------------------------------------
         if ($useCloud -and $licenseMode -eq 'Direct') {
             $skuName = Get-LtCsvValue $row 'LicenseSku'
             if (-not $skuName) { $skuName = $m365.DefaultLicenseSku }
             if (-not $usageLocation) { throw 'No UsageLocation in CSV or M365.DefaultUsageLocation; required for licensing' }
-            $sku = Resolve-LtLicenseSku -SkuPartNumber $skuName   # validates the SKU even in preview
+            $sku = Resolve-LtLicenseSku -SkuPartNumber $skuName
             if ($isPreview) {
                 Write-LtLog "Would: assign licence $skuName ($($sku.Available) free) after sync" -Level WHATIF -Subject $sam
                 Add-LtResultMessage $result Action "Assigned licence $skuName" -Preview
             }
             else {
-                # Licensing waits for Entra Connect; do it for everyone after the AD loop so one sync covers all.
                 $needsLicence.Add([pscustomobject]@{ Result = $result; Sku = $skuName; UsageLocation = $usageLocation })
             }
         }
@@ -228,7 +217,6 @@ foreach ($row in $rows) {
     }
 }
 
-# ---- Direct licensing (after one sync for the whole batch) -----------------------------------
 if ($needsLicence.Count) {
     if ($m365.DirSync.Enabled -and $m365.DirSync.Server) {
         Start-LtDirectorySync @sp -Server $m365.DirSync.Server
@@ -250,10 +238,8 @@ if ($needsLicence.Count) {
     }
 }
 
-# ---- Final status, report and summary --------------------------------------------------------
 foreach ($r in $results) {
     if ($r.Status -ne 'Pending') { continue }
-    # In a preview, any error means the real run would fail for this starter.
     $r.Status = if ($r.Errors.Count) { if ($isPreview) { 'Failed' } else { 'Partial' } } elseif ($isPreview) { 'WhatIf' } else { 'Success' }
 }
 
@@ -264,7 +250,6 @@ Write-LtLog "Report: $reportPath"
 Write-LtLog "Log:    $logFile"
 
 if ($passwords.Count) {
-    # Deliberately shown on screen only: not logged, not in the report.
     Write-Host ''
     Write-Host 'Initial passwords (shown once; users must change at first logon). Hand over securely:' -ForegroundColor Yellow
     $passwords |
@@ -274,7 +259,6 @@ if ($passwords.Count) {
 
 $exitCode = if ($results.Status -match 'Failed|Partial') { 1 } else { 0 }
 if ($PassThru) {
-    # 'exit' would cut off a downstream pipeline (| Format-Table), so return normally instead.
     $global:LASTEXITCODE = $exitCode
     return $results
 }

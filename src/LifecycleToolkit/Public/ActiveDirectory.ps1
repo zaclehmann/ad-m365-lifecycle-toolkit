@@ -1,5 +1,3 @@
-# PSShouldProcess can't see that these functions call $PSCmdlet.ShouldProcess through Invoke-LtChange
-# (the shared wrapper that also handles WHATIF logging), so it is suppressed for this file.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'ShouldProcess is called via Invoke-LtChange -Cmdlet $PSCmdlet.')]
 param()
 
@@ -98,7 +96,6 @@ function New-LtADUser {
     if ($ManagerDN) { $params.Manager = $ManagerDN }
     $params += Get-LtServerParam $Server
 
-    # The CN must be unique within the OU; fall back to "Name (username)" if a namesake already lives there.
     $sp = Get-LtServerParam $Server
     $cnClash = Get-ADUser -Filter "Name -eq '$($displayName.Replace("'", "''"))'" -SearchBase $Path -SearchScope OneLevel @sp
     if ($cnClash) { $params.Name = "$displayName ($SamAccountName)" }
@@ -112,10 +109,6 @@ function Add-LtGroupMembership {
     <#
     .SYNOPSIS
         Ensures a user is a member of each listed group. Groups the user is already in are skipped.
-    .DESCRIPTION
-        Groups can be given by name, sAMAccountName or distinguished name.
-        Each group is checked for existence first, even under -WhatIf, so typos in the config or CSV
-        show up in a preview run. Returns an object listing Added, AlreadyMember and Failed groups.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -164,9 +157,6 @@ function New-LtHomeFolder {
     <#
     .SYNOPSIS
         Creates a user's home folder, grants them access by SID and sets HomeDirectory/HomeDrive.
-    .DESCRIPTION
-        The ACE uses the account SID rather than DOMAIN\user, because a brand-new account may not
-        yet have replicated to the DC the file server asks, and name resolution would fail.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -221,8 +211,6 @@ function Save-LtUserSnapshot {
     <#
     .SYNOPSIS
         Saves a leaver's key attributes, groups and licences to JSON before anything is changed.
-    .DESCRIPTION
-        The snapshot is what Invoke-UserRestore.ps1 uses to put a leaver back as they were.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -310,9 +298,6 @@ function Remove-LtGroupMembership {
     <#
     .SYNOPSIS
         Removes a user from every group except the protected ones.
-    .DESCRIPTION
-        Carries on past a failed removal so one locked-down group doesn't block the rest.
-        Returns an object listing Removed and Failed group names.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -387,7 +372,6 @@ function Move-LtHomeFolder {
     }
     $destination = Join-Path $ArchiveRoot (Split-Path $Path -Leaf)
     Invoke-LtChange -Cmdlet $PSCmdlet -Subject $Subject -Target "$Path -> $destination" -Action 'Archive home folder' -ScriptBlock {
-        # Move-Item can't move folders between servers; robocopy can, and keeps security (/COPY:DATSO).
         $null = & robocopy.exe $Path $destination /E /MOVE /COPY:DATSO /R:1 /W:1 /NP /NFL /NDL
         if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
     }
@@ -397,10 +381,6 @@ function Set-LtAccountExpiration {
     <#
     .SYNOPSIS
         Sets the account to expire at the end of the given day (used for leavers with a future leave date).
-    .DESCRIPTION
-        AD expires an account at the start of AccountExpirationDate, so the value set is the day
-        after the leave date. This is a safety net: access stops on time even if the offboarding
-        run on the day is missed.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -466,9 +446,6 @@ function Get-LtUserSnapshot {
     <#
     .SYNOPSIS
         Loads a leaver snapshot from a file, or finds the earliest snapshot for a user in a folder.
-    .DESCRIPTION
-        The earliest snapshot is the one taken before the first offboarding run. A later run
-        (e.g. a re-run to finish a Partial leaver) snapshots an account already stripped of groups.
     #>
     [CmdletBinding(DefaultParameterSetName = 'Path')]
     param(

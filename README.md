@@ -1,6 +1,6 @@
 # AD / M365 user onboarding and offboarding toolkit (PowerShell)
 
-[![CI](https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-/actions/workflows/ci.yml/badge.svg)](https://github.com/zaclehmann/AD-M365-user-onboarding-and-offboarding-toolkit-PowerShell-/actions/workflows/ci.yml)
+[![CI](https://github.com/zaclehmann/ad-m365-lifecycle-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/zaclehmann/ad-m365-lifecycle-toolkit/actions/workflows/ci.yml)
 ![PowerShell 5.1 | 7](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE?logo=powershell&logoColor=white)
 [![License: MIT-0](https://img.shields.io/badge/License-MIT--0-green.svg)](LICENSE)
 
